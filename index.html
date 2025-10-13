@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chess Game</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="game-container">
+        <div class="game-info">
+            <div class="current-player" id="currentPlayer">Current Player: White</div>
+            <div class="game-status" id="gameStatus">Game in progress</div>
+            <div class="outcome-prediction" id="outcomePrediction">Analyzing position...</div>
+            <div class="prediction-confidence" id="predictionConfidence"></div>
+        </div>
+        
+        <div class="board-wrapper">
+            <div class="rank-numbers">
+                <div>8</div><div>7</div><div>6</div><div>5</div>
+                <div>4</div><div>3</div><div>2</div><div>1</div>
+            </div>
+            <div class="chess-board" id="chessBoard"></div>
+        </div>
+        <div class="coordinates">
+            <div>a</div><div>b</div><div>c</div><div>d</div>
+            <div>e</div><div>f</div><div>g</div><div>h</div>
+        </div>
+        <div class="captured-pieces">
+            <div>Captured White: <span class="captured-white" id="capturedWhite"></span></div>
+            <div>Captured Black: <span class="captured-black" id="capturedBlack"></span></div>
+        </div>
+        
+        <!-- Game End Modal -->
+        <div id="gameEndModal" class="modal">
+            <div class="modal-content">
+                <div class="game-result" id="gameResult"></div>
+                <div class="winner-announcement" id="winnerAnnouncement"></div>
+                <div class="game-stats" id="gameStats"></div>
+                <div class="modal-buttons">
+                    <button class="play-again-btn" onclick="startNewGame()">🎮 Play Again</button>
+                    <button class="close-btn" onclick="closeGameEndModal()">Close</button>
+                </div>
+            </div>
+        </div>
+        
+        <button class="reset-btn" onclick="initializeGame()">New Game</button>
+    </div>
+    <script src="script.js"></script>
+</body>
+</html>
