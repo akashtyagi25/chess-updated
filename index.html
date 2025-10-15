@@ -7,15 +7,71 @@
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
-    <div class="game-container">
-        <div class="game-info">
-            <div class="current-player" id="currentPlayer">Current Player: White</div>
-            <div class="game-status" id="gameStatus">Game in progress</div>
-            <div class="outcome-prediction" id="outcomePrediction">Analyzing position...</div>
-            <div class="prediction-confidence" id="predictionConfidence"></div>
+    <!-- Move List Panel on Left (Outside white box) -->
+    <div class="move-list-panel" id="moveListPanel">
+        <div class="move-list-header" onclick="toggleMoveHistory()">
+            <h3>📜 Move History</h3>
+            <span class="expand-icon" id="expandIcon">▼</span>
         </div>
-        
-        <div class="board-wrapper">
+        <div class="move-list-content collapsed" id="moveListContent">
+            <div class="no-moves">No moves yet</div>
+        </div>
+    </div>
+
+    <!-- Game Duration Panel (Separate) -->
+    <div class="game-duration-panel" id="gameDurationPanel">
+        <div class="duration-header">
+            <div class="duration-icon">⏱️</div>
+            <h3>Game Time</h3>
+        </div>
+        <div class="duration-time" id="durationTime">00:00</div>
+    </div>
+
+    <!-- AI Move Explanation Panel -->
+    <div class="ai-explanation-panel" id="aiExplanationPanel">
+        <div class="ai-explanation-header">
+            <h3>🤖 AI Move Explanation</h3>
+        </div>
+        <div class="ai-explanation-content" id="aiExplanationContent">
+            <div class="no-explanation">AI hasn't moved yet</div>
+        </div>
+    </div>
+
+    <!-- Engine Indicator (Top Right) -->
+    <div class="engine-indicator" id="engineIndicator">
+        <div class="engine-icon">⚙️</div>
+        <div class="engine-name" id="engineName">Adaptive AI</div>
+    </div>
+
+    <!-- Move Quality Feedback (Below Engine Indicator) -->
+    <div class="move-quality-panel" id="moveQualityPanel">
+        <div class="quality-header">📊 Your Last Move</div>
+        <div class="quality-badge" id="qualityBadge">
+            <span class="quality-label">Waiting...</span>
+        </div>
+    </div>
+
+    <!-- Hint System (Below Move Quality) -->
+    <div class="hint-panel" id="hintPanel">
+        <div class="hint-header">
+            <h3>💡 Need Help?</h3>
+            <button class="hint-button" id="hintButton" onclick="getHint()">Show Hint</button>
+        </div>
+        <div class="hint-content" id="hintContent">
+            <div class="hint-message">Click "Show Hint" to get the best move suggestion!</div>
+        </div>
+    </div>
+
+    <div class="game-container">
+        <div class="game-main">
+            <div class="game-info">
+                <div class="current-player" id="currentPlayer">Current Player: White</div>
+                <div class="game-status" id="gameStatus">Game in progress</div>
+                <div class="outcome-prediction" id="outcomePrediction">Analyzing position...</div>
+                <div class="prediction-confidence" id="predictionConfidence"></div>
+            </div>
+            
+            <div class="board-wrapper">
             <div class="rank-numbers">
                 <div>8</div><div>7</div><div>6</div><div>5</div>
                 <div>4</div><div>3</div><div>2</div><div>1</div>
@@ -31,6 +87,9 @@
             <div>Captured Black: <span class="captured-black" id="capturedBlack"></span></div>
         </div>
         
+        <button class="reset-btn" onclick="initializeGame()">New Game</button>
+        </div> <!-- Close game-main -->
+        
         <!-- Game End Modal -->
         <div id="gameEndModal" class="modal">
             <div class="modal-content">
@@ -44,8 +103,27 @@
             </div>
         </div>
         
-        <button class="reset-btn" onclick="initializeGame()">New Game</button>
+    </div> <!-- Close game-container -->
+    
+    <!-- Chatbot Container -->
+    <div class="chatbot-container" id="chatbotContainer">
+        <div class="chatbot-header" onclick="toggleChatbot()">
+            <span class="chatbot-title">Chess Assistant</span>
+            <span class="chatbot-toggle" id="chatbotToggle">▲</span>
+        </div>
+        <div class="chatbot-body" id="chatbotBody" style="display: none;">
+            <div class="chatbot-messages" id="chatbotMessages">
+                <div class="message bot-message">
+                    Hi! I'm your chess assistant. Ask me about piece movements or how castling works!
+                </div>
+            </div>
+            <div class="chatbot-input-container">
+                <input type="text" class="chatbot-input" id="chatbotInput" placeholder="Ask about chess rules..." onkeypress="handleChatbotInput(event)">
+                <button class="chatbot-send-btn" onclick="sendChatbotMessage()">Send</button>
+            </div>
+        </div>
     </div>
+    
     <script src="script.js"></script>
 </body>
 </html>

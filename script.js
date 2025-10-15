@@ -239,6 +239,10 @@ let aiMode = 'default'; // 'aggressive', 'defensive', 'default'
 let isNewGame = true;
 let moveInProgress = false; // Prevent duplicate move processing
 
+// Game Duration Timer
+let gameStartTime = null;
+let gameDurationInterval = null;
+
 // Initialize the game
 function initializeGame() {
     gameBoard = initialBoard.map(row => [...row]);
@@ -254,16 +258,576 @@ function initializeGame() {
     window.blunderCount = 0;
     window.nonCaptureMoves = 0;
     
+    // Start game duration timer
+    startGameTimer();
+    
     console.log('🆕 [INIT] Game initialized - moveHistory cleared:', moveHistory);
     
     updateGameInfo();
     createBoard();
     updateCapturedPieces();
+    updateMoveListDisplay(); // Update move list
+    updateAIExplanation(null); // Clear AI explanation
+    updateEngineIndicator('adaptive'); // Reset to Adaptive AI
+    
+    // Reset move quality panel
+    const qualityLabel = document.querySelector('.quality-label');
+    if (qualityLabel) qualityLabel.textContent = 'Waiting...';
+    const qualityPanel = document.getElementById('moveQualityPanel');
+    if (qualityPanel) {
+        qualityPanel.classList.remove('best', 'good', 'inaccuracy', 'mistake', 'blunder');
+    }
     
     // Initialize outcome prediction for new game
     setTimeout(() => {
         initializePrediction();
     }, 500); // Small delay to ensure board is ready
+}
+
+// Function to update the move list display
+function updateMoveListDisplay() {
+    const moveListContent = document.getElementById('moveListContent');
+    
+    if (moveHistory.length === 0) {
+        moveListContent.innerHTML = '<div class="no-moves">No moves yet</div>';
+        return;
+    }
+    
+    moveListContent.innerHTML = '';
+    
+    // Group moves in pairs (white and black)
+    for (let i = 0; i < moveHistory.length; i += 2) {
+        const moveNumber = Math.floor(i / 2) + 1;
+        const whiteMove = moveHistory[i];
+        const blackMove = moveHistory[i + 1] || '';
+        
+        const movePair = document.createElement('div');
+        movePair.classList.add('move-pair');
+        
+        // Highlight the latest move
+        if (i === moveHistory.length - 1 || i === moveHistory.length - 2) {
+            movePair.classList.add('latest');
+        }
+        
+        movePair.innerHTML = `
+            <span class="move-number">${moveNumber}.</span>
+            <span class="white-move">${convertUCItoSAN(whiteMove)}</span>
+            ${blackMove ? `<span class="black-move">${convertUCItoSAN(blackMove)}</span>` : ''}
+        `;
+        
+        moveListContent.appendChild(movePair);
+    }
+    
+    // Scroll to bottom to show latest move
+    moveListContent.scrollTop = moveListContent.scrollHeight;
+}
+
+// Update Move Quality Feedback Display
+function updateMoveQuality(quality) {
+    const panel = document.getElementById('moveQualityPanel');
+    const badge = document.getElementById('qualityBadge');
+    const label = badge ? badge.querySelector('.quality-label') : null;
+    
+    if (!panel || !label) return;
+    
+    // Remove all quality classes
+    panel.classList.remove('best', 'good', 'inaccuracy', 'mistake', 'blunder');
+    
+    // Map quality to display
+    const qualityMap = {
+        'Best': { text: '⭐ Best Move!', class: 'best' },
+        'Good': { text: '✅ Good Move', class: 'good' },
+        'Inaccuracy': { text: '🟡 Inaccuracy', class: 'inaccuracy' },
+        'Mistake': { text: '🟠 Mistake', class: 'mistake' },
+        'Blunder': { text: '🔴 Blunder!', class: 'blunder' }
+    };
+    
+    const qualityInfo = qualityMap[quality] || { text: 'Analyzing...', class: '' };
+    
+    label.textContent = qualityInfo.text;
+    if (qualityInfo.class) {
+        panel.classList.add(qualityInfo.class);
+    }
+}
+
+// Get move quality feedback from backend
+async function getMoveQuality(fen, moveUCI) {
+    try {
+        console.log('📡 Fetching move quality for:', { fen, move: moveUCI });
+        
+        const response = await fetch('http://127.0.0.1:5000/move-feedback', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ fen: fen, move: moveUCI })
+        });
+        
+        console.log('📡 Response status:', response.status);
+        
+        if (response.ok) {
+            const data = await response.json();
+            console.log('✅ [MOVE QUALITY] Response:', data);
+            
+            if (data.label) {
+                updateMoveQuality(data.label);
+            } else {
+                console.warn('⚠️ No label in response:', data);
+            }
+        } else {
+            const errorText = await response.text();
+            console.error('❌ API error:', response.status, errorText);
+        }
+    } catch (error) {
+        console.error('❌ Could not get move quality feedback:', error);
+    }
+}
+
+// Get Hint from Backend
+async function getHint() {
+    if (currentPlayer !== 'white') {
+        showHintMessage("It's not your turn!");
+        return;
+    }
+    
+    const hintButton = document.getElementById('hintButton');
+    hintButton.disabled = true;
+    hintButton.textContent = 'Analyzing...';
+    
+    try {
+        const currentFEN = boardToFEN();
+        console.log('💡 Requesting hint for FEN:', currentFEN);
+        
+        const response = await fetch('http://127.0.0.1:5000/get-hint', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ fen: currentFEN, top_moves: 3 })
+        });
+        
+        if (response.ok) {
+            const data = await response.json();
+            console.log('✅ [HINT] Response:', data);
+            
+            if (data.hints && data.hints.length > 0) {
+                displayMultipleHints(data.hints);
+            } else {
+                showHintMessage('No hint available for this position.');
+            }
+        } else {
+            const errorText = await response.text();
+            console.error('❌ Hint API error:', response.status, errorText);
+            showHintMessage('Failed to get hint. Please try again.');
+        }
+    } catch (error) {
+        console.error('❌ Could not get hint:', error);
+        showHintMessage('Failed to connect to hint service.');
+    } finally {
+        hintButton.disabled = false;
+        hintButton.textContent = 'Show Hint';
+    }
+}
+
+function displayMultipleHints(hints) {
+    const hintContent = document.getElementById('hintContent');
+    
+    let hintsHTML = `
+        <div class="hint-controls">
+            <button class="hint-control-btn active" onclick="toggleBlur(false)">👁️ Show All</button>
+            <button class="hint-control-btn" onclick="toggleBlur(true)">🔒 Blur Moves</button>
+        </div>
+    `;
+    
+    const rankLabels = ['Best Move', '2nd Best', '3rd Best'];
+    const rankClasses = ['', 'second', 'third'];
+    
+    hints.forEach((hint, index) => {
+        const from = hint.move.substring(0, 2);
+        const to = hint.move.substring(2, 4);
+        const readableMove = `${from} → ${to}`;
+        
+        const evalDisplay = hint.evaluation > 0 ? `+${hint.evaluation}` : hint.evaluation;
+        const evalColor = hint.evaluation > 100 ? '#2E7D32' : hint.evaluation < -100 ? '#D32F2F' : '#FF9800';
+        
+        hintsHTML += `
+            <div class="hint-suggestion" data-index="${index}">
+                <span class="hint-rank ${rankClasses[index]}">${rankLabels[index]}</span>
+                <div class="hint-move">${readableMove}</div>
+                <div class="hint-explanation">${hint.explanation}</div>
+                <div class="hint-stats">
+                    <div class="hint-stat">
+                        <div class="hint-stat-label">Evaluation</div>
+                        <div class="hint-stat-value" style="color: ${evalColor}">${evalDisplay}</div>
+                    </div>
+                    <div class="hint-stat">
+                        <div class="hint-stat-label">Depth</div>
+                        <div class="hint-stat-value">${hint.depth || 'N/A'}</div>
+                    </div>
+                </div>
+            </div>
+        `;
+    });
+    
+    hintContent.innerHTML = hintsHTML;
+}
+
+function toggleBlur(shouldBlur) {
+    const suggestions = document.querySelectorAll('.hint-suggestion');
+    const buttons = document.querySelectorAll('.hint-control-btn');
+    
+    // Update button states
+    buttons.forEach(btn => btn.classList.remove('active'));
+    if (shouldBlur) {
+        buttons[1].classList.add('active');
+    } else {
+        buttons[0].classList.add('active');
+    }
+    
+    // Toggle blur on all hints
+    suggestions.forEach(suggestion => {
+        if (shouldBlur) {
+            suggestion.classList.add('blurred');
+        } else {
+            suggestion.classList.remove('blurred');
+        }
+    });
+}
+
+function displayHint(hintData) {
+    const hintContent = document.getElementById('hintContent');
+    
+    const moveUCI = hintData.best_move || 'unknown';
+    const evaluation = hintData.evaluation || 0;
+    const explanation = hintData.explanation || 'This is the best move in this position.';
+    
+    // Convert UCI to readable format (e.g., "e2e4" -> "e2 to e4")
+    const from = moveUCI.substring(0, 2);
+    const to = moveUCI.substring(2, 4);
+    const readableMove = `${from} → ${to}`;
+    
+    hintContent.innerHTML = `
+        <div class="hint-suggestion">
+            <div class="hint-move">${readableMove}</div>
+            <div class="hint-explanation">${explanation}</div>
+            <div class="hint-evaluation">
+                Evaluation: ${evaluation > 0 ? '+' : ''}${evaluation}
+            </div>
+        </div>
+    `;
+}
+
+function showHintMessage(message) {
+    const hintContent = document.getElementById('hintContent');
+    hintContent.innerHTML = `<div class="hint-message">${message}</div>`;
+}
+
+// Toggle Move History Expansion
+function toggleMoveHistory() {
+    const moveListContent = document.getElementById('moveListContent');
+    const expandIcon = document.getElementById('expandIcon');
+    
+    if (moveListContent.classList.contains('collapsed')) {
+        // Expand
+        moveListContent.classList.remove('collapsed');
+        expandIcon.classList.add('expanded');
+    } else {
+        // Collapse
+        moveListContent.classList.add('collapsed');
+        expandIcon.classList.remove('expanded');
+    }
+}
+
+// Game Duration Timer Functions
+function startGameTimer() {
+    // Clear existing timer if any
+    if (gameDurationInterval) {
+        clearInterval(gameDurationInterval);
+    }
+    
+    // Set start time
+    gameStartTime = Date.now();
+    
+    // Update timer every second
+    gameDurationInterval = setInterval(updateGameDuration, 1000);
+    
+    // Initial update
+    updateGameDuration();
+}
+
+function updateGameDuration() {
+    if (!gameStartTime) return;
+    
+    const elapsed = Math.floor((Date.now() - gameStartTime) / 1000); // seconds
+    const minutes = Math.floor(elapsed / 60);
+    const seconds = elapsed % 60;
+    
+    const timeString = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+    
+    const durationElement = document.getElementById('durationTime');
+    if (durationElement) {
+        durationElement.textContent = timeString;
+    }
+}
+
+function stopGameTimer() {
+    if (gameDurationInterval) {
+        clearInterval(gameDurationInterval);
+        gameDurationInterval = null;
+    }
+}
+
+// Update AI Move Explanation
+function updateAIExplanation(moveData) {
+    const explanationContent = document.getElementById('aiExplanationContent');
+    
+    if (!moveData || !moveData.explanation) {
+        explanationContent.innerHTML = '<div class="no-explanation">AI hasn\'t moved yet</div>';
+        return;
+    }
+    
+    const moveNumber = Math.ceil(moveHistory.length / 2);
+    const moveUCI = moveData.move || 'unknown';
+    const explanation = moveData.explanation || 'No explanation available';
+    
+    explanationContent.innerHTML = `
+        <div class="explanation-move">
+            Move ${moveNumber}: ${convertUCItoSAN(moveUCI)}
+        </div>
+        <div class="explanation-reason">
+            ${explanation}
+        </div>
+    `;
+    
+    // Update engine indicator
+    if (moveData.engine) {
+        updateEngineIndicator(moveData.engine);
+    }
+}
+
+// Update Engine Indicator
+function updateEngineIndicator(engineType) {
+    const indicator = document.getElementById('engineIndicator');
+    const engineName = document.getElementById('engineName');
+    
+    if (!indicator || !engineName) return;
+    
+    // Remove previous engine class
+    indicator.classList.remove('stockfish', 'adaptive');
+    
+    // Determine engine display name and styling
+    if (engineType.toLowerCase().includes('stockfish')) {
+        indicator.classList.add('stockfish');
+        engineName.textContent = 'Stockfish';
+    } else if (engineType.toLowerCase().includes('adaptive')) {
+        indicator.classList.add('adaptive');
+        engineName.textContent = 'Adaptive AI';
+    } else if (engineType.toLowerCase().includes('random')) {
+        indicator.classList.add('adaptive');
+        engineName.textContent = 'Adaptive AI';
+    } else {
+        indicator.classList.add('adaptive');
+        engineName.textContent = 'Adaptive AI';
+    }
+}
+
+// Convert UCI notation to simpler display format (e.g., e2e4 -> e4)
+function convertUCItoSAN(uciMove) {
+    if (!uciMove || uciMove.length < 4) return uciMove;
+    
+    // For simple display, just show the destination square
+    // You can enhance this to show piece symbols if needed
+    const from = uciMove.substring(0, 2);
+    const to = uciMove.substring(2, 4);
+    
+    // Check if it's a capture or just a move
+    return to; // Simple version - just show destination
+}
+
+// Initialize the game and chatbot when the page loads
+document.addEventListener('DOMContentLoaded', function() {
+    initializeGame();
+    initializeChatbot();
+});
+
+// Initialize chatbot
+function initializeChatbot() {
+    // Check if welcome message already exists
+    const messagesContainer = document.getElementById('chatbotMessages');
+    const existingMessages = messagesContainer.querySelectorAll('.message');
+    
+    // Only add welcome message if there are no messages
+    if (existingMessages.length === 0) {
+        setTimeout(() => {
+            addChatbotMessage("Welcome! I'm your chess assistant. Ask me about chess openings, piece movements, or special moves like castling!");
+        }, 1000);
+    }
+}
+
+// --- Chatbot Functions ---
+function toggleChatbot() {
+    const chatbotBody = document.getElementById('chatbotBody');
+    const chatbotToggle = document.getElementById('chatbotToggle');
+    
+    if (chatbotBody.style.display === 'none') {
+        chatbotBody.style.display = 'flex';
+        chatbotToggle.textContent = '▼';
+    } else {
+        chatbotBody.style.display = 'none';
+        chatbotToggle.textContent = '▲';
+    }
+}
+
+function addChatbotMessage(message, isUser = false) {
+    const messagesContainer = document.getElementById('chatbotMessages');
+    const messageElement = document.createElement('div');
+    messageElement.classList.add('message');
+    messageElement.classList.add(isUser ? 'user-message' : 'bot-message');
+    messageElement.textContent = message;
+    messagesContainer.appendChild(messageElement);
+    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+}
+
+function handleChatbotInput(event) {
+    if (event.key === 'Enter') {
+        sendChatbotMessage();
+    }
+}
+
+function sendChatbotMessage() {
+    const inputElement = document.getElementById('chatbotInput');
+    const message = inputElement.value.trim();
+    
+    if (message) {
+        addChatbotMessage(message, true);
+        inputElement.value = '';
+        
+        // Process the message and generate a response
+        const response = generateChatbotResponse(message);
+        setTimeout(() => {
+            addChatbotMessage(response);
+        }, 500);
+    }
+}
+
+function generateChatbotResponse(message) {
+    const lowerMessage = message.toLowerCase();
+    
+    // Chess Openings Information
+    if (lowerMessage.includes('opening') || lowerMessage.includes('italian') || lowerMessage.includes('sicilian') || 
+        lowerMessage.includes('french') || lowerMessage.includes('caro-kann') || lowerMessage.includes('spanish') ||
+        lowerMessage.includes('ruy lopez') || lowerMessage.includes('queens gambit') || lowerMessage.includes('king') && lowerMessage.includes('gambit')) {
+        
+        if (lowerMessage.includes('italian')) {
+            return "🇮🇹 Italian Game:\n" +
+                   "1. e4 e5\n" +
+                   "2. Nf3 Nc6\n" +
+                   "3. Bc4\n\n" +
+                   "A classical opening focusing on quick development and control of the center. The bishop on c4 targets the weak f7 square. Popular and aggressive!";
+        }
+        
+        if (lowerMessage.includes('sicilian')) {
+            return "🏴 Sicilian Defense:\n" +
+                   "1. e4 c5\n\n" +
+                   "Black's most popular response to e4! Creates asymmetrical positions with winning chances. The c5 pawn attacks d4 and fights for central control. Leads to sharp, tactical play.";
+        }
+        
+        if (lowerMessage.includes('french')) {
+            return "🇫🇷 French Defense:\n" +
+                   "1. e4 e6\n" +
+                   "2. d4 d5\n\n" +
+                   "A solid defensive system. Black builds a strong pawn chain and prepares to challenge White's center. Can lead to closed positions with strategic play.";
+        }
+        
+        if (lowerMessage.includes('caro') || lowerMessage.includes('kann')) {
+            return "🛡️ Caro-Kann Defense:\n" +
+                   "1. e4 c6\n" +
+                   "2. d4 d5\n\n" +
+                   "A very solid opening! Black prepares d5 without blocking the light-squared bishop. Known for being safe and leading to good positions.";
+        }
+        
+        if (lowerMessage.includes('spanish') || lowerMessage.includes('ruy lopez')) {
+            return "🇪🇸 Ruy Lopez (Spanish Opening):\n" +
+                   "1. e4 e5\n" +
+                   "2. Nf3 Nc6\n" +
+                   "3. Bb5\n\n" +
+                   "One of the oldest and most respected openings! White puts pressure on Black's knight which defends the e5 pawn. Rich in strategy and theory.";
+        }
+        
+        if (lowerMessage.includes('queen') && lowerMessage.includes('gambit')) {
+            return "♛ Queen's Gambit:\n" +
+                   "1. d4 d5\n" +
+                   "2. c4\n\n" +
+                   "White offers a pawn to gain central control! Not a true gambit since Black can't hold the pawn. Leads to strategic positions with slight White advantage.";
+        }
+        
+        if (lowerMessage.includes('king') && lowerMessage.includes('gambit')) {
+            return "👑 King's Gambit:\n" +
+                   "1. e4 e5\n" +
+                   "2. f4\n\n" +
+                   "An aggressive romantic-era opening! White sacrifices a pawn for rapid development and attacking chances. Risky but exciting!";
+        }
+        
+        // General openings help
+        return "🎯 Popular Chess Openings:\n\n" +
+               "• Italian Game - Classic and aggressive\n" +
+               "• Sicilian Defense - Sharp counter-attack\n" +
+               "• French Defense - Solid and strategic\n" +
+               "• Caro-Kann - Safe and reliable\n" +
+               "• Ruy Lopez - Time-tested classic\n" +
+               "• Queen's Gambit - Strategic control\n" +
+               "• King's Gambit - Bold attack\n\n" +
+               "Ask about any specific opening!";
+    }
+    
+    // Castling information
+    if (lowerMessage.includes('castling') || lowerMessage.includes('castle') || lowerMessage.includes('king side') || lowerMessage.includes('queen side')) {
+        return "Castling is a special move involving the king and a rook. There are two types:\n\n" +
+               "1. Kingside castling (short): King moves 2 squares towards the rook on the same side, then the rook moves to the square next to the king.\n" +
+               "2. Queenside castling (long): King moves 2 squares towards the rook on the opposite side, then the rook moves to the square next to the king.\n\n" +
+               "Requirements:\n" +
+               "- Neither the king nor the rook has moved\n" +
+               "- No squares between the king and rook are occupied\n" +
+               "- The king is not in check\n" +
+               "- The king does not pass through or land on attacked squares";
+    }
+    
+    // Piece movement information
+    if (lowerMessage.includes('king')) {
+        return "The King moves exactly one square in any direction (horizontally, vertically, or diagonally). The King can also castle once per game under specific conditions.";
+    }
+    
+    if (lowerMessage.includes('queen')) {
+        return "The Queen can move any number of squares in any direction (horizontally, vertically, or diagonally) as long as the path is clear.";
+    }
+    
+    if (lowerMessage.includes('rook')) {
+        return "The Rook moves any number of squares horizontally or vertically as long as the path is clear. It also participates in castling.";
+    }
+    
+    if (lowerMessage.includes('bishop')) {
+        return "The Bishop moves any number of squares diagonally as long as the path is clear. Each player starts with one bishop on light squares and one on dark squares.";
+    }
+    
+    if (lowerMessage.includes('knight')) {
+        return "The Knight moves in an L-shape: two squares in one direction and then one square perpendicular to that. It's the only piece that can jump over other pieces.";
+    }
+    
+    if (lowerMessage.includes('pawn')) {
+        return "The Pawn moves forward one square, but captures diagonally. On its first move, it can move forward two squares. When it reaches the opposite end, it can be promoted to any other piece (usually a Queen).";
+    }
+    
+    // General help
+    if (lowerMessage.includes('help') || lowerMessage.includes('how') || lowerMessage.includes('move')) {
+        return "I can help you learn chess! Ask me about:\n\n" +
+               "🎯 Chess Openings (Italian, Sicilian, French, etc.)\n" +
+               "♟️ Piece Movements (How does the knight move?)\n" +
+               "🏰 Special Moves (Castling, En Passant)\n\n" +
+               "Try: 'Tell me about Italian Game' or 'How does the queen move?'";
+    }
+    
+    // Default response
+    return "I'm here to help you learn chess! Ask me about:\n\n" +
+           "• Chess Openings\n" +
+           "• Piece Movements\n" +
+           "• Castling Rules\n\n" +
+           "For example: 'What is Sicilian Defense?' or 'How does the bishop move?'";
 }
 
 // NEW: Add New Game button function
@@ -714,6 +1278,9 @@ function makeMove(fromRow, fromCol, toRow, toCol) {
         
         console.log(`Valid move confirmed: ${piece} from (${fromRow},${fromCol}) to (${toRow},${toCol})`);
         
+        // Get FEN BEFORE making the move (for move quality analysis)
+        const fenBeforeMove = currentPlayer === 'white' ? boardToFEN() : null;
+        
         const capturedPiece = gameBoard[toRow][toCol];
         // Handle captured piece
         if (capturedPiece) {
@@ -748,12 +1315,21 @@ function makeMove(fromRow, fromCol, toRow, toCol) {
             return;
         }
         
+        // Get move quality feedback for player moves (white) using FEN from BEFORE the move
+        if (currentPlayer === 'white' && fenBeforeMove) {
+            console.log('🔍 Requesting move quality for FEN:', fenBeforeMove, 'Move:', moveStr);
+            getMoveQuality(fenBeforeMove, moveStr);
+        }
+        
         // SUCCESS: Record the validated move
         moveHistory.push(moveStr);
         
         console.log(`✅ MOVE RECORDED: ${moveStr} (${fromSquare} to ${toSquare})`);
         console.log(`📋 Updated moveHistory (${moveHistory.length}):`, moveHistory);
         console.log(`=== END MAKEMOVE DEBUG ===\n`);
+
+        // Update the move list display
+        updateMoveListDisplay();
 
         // --- Check for king capture only (no insufficient material check) ---
         let whiteKing = false, blackKing = false;
@@ -933,12 +1509,16 @@ async function aiMove() {
             console.log(`=== END AI MOVE VALIDATION ===\n`);
             console.log(`[AI MOVE] Updated moveHistory length: ${moveHistory.length}`);
             
+            // Update AI move explanation
+            updateAIExplanation(data);
+            
             // Update board from FEN
             fenToBoard(data.fen);
             createBoard();
             updateCapturedPieces();
             currentPlayer = 'white';
             updateGameInfo();
+            updateMoveListDisplay(); // Update move list immediately after AI move
 
             // Check for game end after AI move (for human)
             let whiteKing = false, blackKing = false;
@@ -1103,6 +1683,11 @@ function updateGameStatus(status) {
     document.getElementById('gameStatus').textContent = status;
     document.getElementById('gameStatus').style.color = '#e74c3c';
     document.getElementById('gameStatus').style.fontWeight = 'bold';
+    
+    // Stop timer when game ends
+    if (status.includes('Game Over') || status.includes('Checkmate') || status.includes('Stalemate')) {
+        stopGameTimer();
+    }
 }
 
 // Update captured pieces display
@@ -1227,8 +1812,7 @@ function handleDrop(e) {
     clearSelection();
 }
 
-// Initialize the game when page loads
-document.addEventListener('DOMContentLoaded', initializeGame);
+
 
 // Feedback system after game loss
 async function showGameFeedback() {
