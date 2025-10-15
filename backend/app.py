@@ -12,9 +12,72 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 from collections import deque
 import numpy as np
+from datetime import datetime, timedelta
 
 # Ensure better randomization
 random.seed(int(time.time()))
+
+# --- Auto-cleanup function for old game data ---
+def cleanup_old_game_data(csv_file="user_game_data.csv", keep_last_n=3, days_threshold=14):
+    """
+    Clean up old game data from CSV file.
+    Keeps only the last N records and removes records older than days_threshold.
+    
+    Args:
+        csv_file: Path to the CSV file
+        keep_last_n: Number of most recent records to always keep (default: 3)
+        days_threshold: Remove records older than this many days (default: 14)
+    """
+    try:
+        if not os.path.exists(csv_file):
+            print(f"[CLEANUP] File {csv_file} doesn't exist yet")
+            return
+        
+        # Read the CSV file
+        df = pd.read_csv(csv_file)
+        
+        # Check if file has timestamp column, if not add it
+        if 'timestamp' not in df.columns:
+            # Add current timestamp to existing records
+            df['timestamp'] = datetime.now().isoformat()
+            print(f"[CLEANUP] Added timestamp column to {len(df)} existing records")
+        
+        # Convert timestamp to datetime
+        df['timestamp'] = pd.to_datetime(df['timestamp'])
+        
+        # Calculate cutoff date
+        cutoff_date = datetime.now() - timedelta(days=days_threshold)
+        
+        # Get total records before cleanup
+        total_before = len(df)
+        
+        # Keep last N records regardless of date
+        last_n_records = df.tail(keep_last_n)
+        
+        # Keep records newer than cutoff date
+        recent_records = df[df['timestamp'] >= cutoff_date]
+        
+        # Combine and remove duplicates
+        df_cleaned = pd.concat([recent_records, last_n_records]).drop_duplicates()
+        
+        # Sort by timestamp
+        df_cleaned = df_cleaned.sort_values('timestamp')
+        
+        # Save back to CSV
+        df_cleaned.to_csv(csv_file, index=False)
+        
+        total_after = len(df_cleaned)
+        removed = total_before - total_after
+        
+        print(f"[CLEANUP] Cleaned {csv_file}:")
+        print(f"  - Records before: {total_before}")
+        print(f"  - Records after: {total_after}")
+        print(f"  - Records removed: {removed}")
+        print(f"  - Kept last {keep_last_n} records")
+        print(f"  - Removed records older than {days_threshold} days")
+        
+    except Exception as e:
+        print(f"[CLEANUP ERROR] Failed to cleanup {csv_file}: {e}")
 
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*", "allow_headers": "*", "methods": ["GET", "POST", "OPTIONS", "PUT", "DELETE"]}}, supports_credentials=True)
@@ -93,6 +156,161 @@ def move_feedback():
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+# --- Hint System Endpoint ---
+@app.route('/get-hint', methods=['POST', 'OPTIONS'])
+def get_hint():
+    print("[DEBUG] /get-hint endpoint hit")
+    if request.method == 'OPTIONS':
+        return '', 200
+    
+    data = request.get_json()
+    fen = data.get('fen')
+    top_moves = data.get('top_moves', 3)  # Get top N moves
+    
+    if not fen:
+        return jsonify({'error': 'FEN is required'}), 400
+    
+    try:
+        board = chess.Board(fen)
+        
+        if not stockfish_engine:
+            return jsonify({'error': 'Stockfish engine not available'}), 500
+        
+        # Get multiple best moves from Stockfish
+        result = stockfish_engine.analyse(board, chess.engine.Limit(time=1.5, depth=20), multipv=top_moves)
+        
+        hints = []
+        
+        if isinstance(result, list):
+            # Multiple moves returned
+            for idx, move_info in enumerate(result):
+                hint = process_hint_info(board, move_info, idx)
+                if hint:
+                    hints.append(hint)
+        else:
+            # Single move returned
+            hint = process_hint_info(board, result, 0)
+            if hint:
+                hints.append(hint)
+        
+        print(f"[HINT] Returning {len(hints)} hints")
+        
+        return jsonify({
+            'hints': hints,
+            'total_hints': len(hints)
+        })
+        
+    except Exception as e:
+        print(f"[HINT ERROR] {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+def process_hint_info(board, move_info, index):
+    """Process a single hint from engine analysis"""
+    try:
+        if 'pv' not in move_info or not move_info['pv']:
+            return None
+        
+        move = move_info['pv'][0]
+        move_uci = move.uci()
+        
+        # Get evaluation
+        evaluation = 0
+        if 'score' in move_info:
+            score = move_info['score'].white()
+            if score.is_mate():
+                mate_in = score.mate()
+                evaluation = 10000 if mate_in > 0 else -10000
+            else:
+                evaluation = score.score()
+        
+        # Get depth
+        depth = move_info.get('depth', 'N/A')
+        
+        # Generate explanation
+        explanation = generate_hint_explanation(board, move_uci, evaluation, index)
+        
+        return {
+            'move': move_uci,
+            'evaluation': evaluation,
+            'depth': depth,
+            'explanation': explanation,
+            'rank': index + 1
+        }
+    except Exception as e:
+        print(f"[HINT PROCESS ERROR] {str(e)}")
+        return None
+
+def generate_hint_explanation(board, move_uci, evaluation, rank=0):
+    """Generate a human-readable explanation for the hint"""
+    if not move_uci:
+        return "No clear best move found."
+    
+    try:
+        move = chess.Move.from_uci(move_uci)
+        piece = board.piece_at(move.from_square)
+        
+        explanations = []
+        
+        # Piece type
+        piece_names = {
+            chess.PAWN: 'Pawn',
+            chess.KNIGHT: 'Knight',
+            chess.BISHOP: 'Bishop',
+            chess.ROOK: 'Rook',
+            chess.QUEEN: 'Queen',
+            chess.KING: 'King'
+        }
+        if piece:
+            piece_name = piece_names.get(piece.piece_type, 'Piece')
+            explanations.append(f"{piece_name} move")
+        
+        # Check if it's a capture
+        is_capture = board.is_capture(move)
+        if is_capture:
+            captured = board.piece_at(move.to_square)
+            if captured:
+                captured_name = piece_names.get(captured.piece_type, 'piece')
+                explanations.append(f"captures {captured_name}")
+        
+        # Check if it gives check
+        board_copy = board.copy()
+        board_copy.push(move)
+        if board_copy.is_check():
+            explanations.append("gives check!")
+        
+        if board_copy.is_checkmate():
+            explanations.append("CHECKMATE!")
+        
+        # Evaluation-based explanation
+        if evaluation > 500:
+            explanations.append("Winning position")
+        elif evaluation > 200:
+            explanations.append("Strong advantage")
+        elif evaluation > 50:
+            explanations.append("Slight edge")
+        elif evaluation < -500:
+            explanations.append("Defensive necessity")
+        elif evaluation < -200:
+            explanations.append("Damage control")
+        elif -50 <= evaluation <= 50:
+            explanations.append("Equal position")
+        
+        # Rank-based prefix
+        if rank == 0:
+            prefix = "Best: "
+        elif rank == 1:
+            prefix = "Alternative: "
+        else:
+            prefix = "Option: "
+        
+        if explanations:
+            return prefix + ", ".join(explanations) + "."
+        else:
+            return prefix + "Recommended by engine."
+            
+    except Exception as e:
+        return "Engine recommended move."
 
 from sklearn.linear_model import LinearRegression
 from sklearn.ensemble import RandomForestClassifier
@@ -980,11 +1198,13 @@ def save_game_data():
         
         estimated_elo = max(800, min(1600, estimated_elo))  # Clamp between 800-1600
         
-        # Save to CSV
+        # Save to CSV with timestamp
         import csv
         with open('user_game_data.csv', 'a', newline='') as f:
             writer = csv.writer(f)
-            writer.writerow([result, blunders, cpl, moves, round(estimated_elo)])
+            # Add timestamp to the data
+            timestamp = datetime.now().isoformat()
+            writer.writerow([result, blunders, cpl, moves, round(estimated_elo), timestamp])
         
         return jsonify({
             'success': True, 
@@ -1170,4 +1390,8 @@ def cleanup():
         stockfish_engine.quit()
 
 if __name__ == '__main__':
+    # Run cleanup on startup
+    print("[STARTUP] Running initial cleanup of old game data...")
+    cleanup_old_game_data("user_game_data.csv", keep_last_n=3, days_threshold=14)
+    
     app.run(debug=True)
