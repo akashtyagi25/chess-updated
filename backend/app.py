@@ -42,8 +42,8 @@ def cleanup_old_game_data(csv_file="user_game_data.csv", keep_last_n=3, days_thr
             df['timestamp'] = datetime.now().isoformat()
             print(f"[CLEANUP] Added timestamp column to {len(df)} existing records")
         
-        # Convert timestamp to datetime
-        df['timestamp'] = pd.to_datetime(df['timestamp'])
+        # Convert timestamp to datetime (handles both ISO8601 and other formats)
+        df['timestamp'] = pd.to_datetime(df['timestamp'], format='ISO8601')
         
         # Calculate cutoff date
         cutoff_date = datetime.now() - timedelta(days=days_threshold)
